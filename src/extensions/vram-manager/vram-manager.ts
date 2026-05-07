@@ -284,7 +284,7 @@ function createConfigureGroupTool(pi: ExtensionAPI) {
 	});
 }
 
-function createRunComfyUITool(pi: ExtensionAPI) {
+function createRunComfyUITool(_pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-run-comfyui",
 		label: "Run ComfyUI (with VRAM coordination)",
@@ -380,7 +380,7 @@ function createRunComfyUITool(pi: ExtensionAPI) {
 	});
 }
 
-function createUnloadTool(pi: ExtensionAPI) {
+function createUnloadTool(_pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-unload",
 		label: "Unload Server",
@@ -417,7 +417,7 @@ function createUnloadTool(pi: ExtensionAPI) {
 	});
 }
 
-function createGetConfigTool(pi: ExtensionAPI) {
+function createGetConfigTool(_pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-get-config",
 		label: "Get Config",
@@ -497,7 +497,7 @@ function createSystemStatsTool(_pi: ExtensionAPI) {
 	});
 }
 
-function createCheckVramConflictTool(pi: ExtensionAPI) {
+function createCheckVramConflictTool(_pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-check-vram-conflict",
 		label: "Check VRAM Conflict",
@@ -552,7 +552,7 @@ function createCheckVramConflictTool(pi: ExtensionAPI) {
 	});
 }
 
-function createReloadTool(pi: ExtensionAPI) {
+function createReloadTool(_pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-reload",
 		label: "Reload Server",
@@ -589,7 +589,7 @@ function createReloadTool(pi: ExtensionAPI) {
 	});
 }
 
-function createReloadAllTool(pi: ExtensionAPI) {
+function createReloadAllTool(_pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-reload-all",
 		label: "Reload All Unloaded Servers",
@@ -677,7 +677,7 @@ function createLoadedModelsTool(_pi: ExtensionAPI) {
 	});
 }
 
-function createReserveTool(pi: ExtensionAPI) {
+function createReserveTool(_pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-reserve",
 		label: "Reserve VRAM",
@@ -725,7 +725,7 @@ function createReserveTool(pi: ExtensionAPI) {
 	});
 }
 
-function createReleaseTool(pi: ExtensionAPI) {
+function createReleaseTool(_pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-release",
 		label: "Release VRAM",
@@ -734,7 +734,7 @@ function createReleaseTool(pi: ExtensionAPI) {
 			reservationId: Type.Optional(Type.String({ description: "Reservation ID from vram-manager-reserve (omit to reload all unloaded servers)" })),
 		}),
 
-		async execute(_toolCallId: string, params: { reservationId?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, _params: { reservationId?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
 			loadConfig(ctx);
 
 			const records = getUnloadedServers();
