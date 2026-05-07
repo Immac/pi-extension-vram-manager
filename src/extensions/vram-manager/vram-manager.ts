@@ -17,6 +17,7 @@ interface Server {
 	name: string;
 	baseUrl: string;
 	unloadEndpoint?: string;
+	reloadEndpoint?: string;
 }
 
 interface HardwareGroup {
@@ -62,6 +63,44 @@ function loadConfig(ctx: ExtensionContext): void {
 
 async function saveConfig(pi: ExtensionAPI): Promise<void> {
 	await pi.appendEntry(STATE_ENTRY_TYPE, config);
+}
+
+// ============================================================================
+// Unload Registry
+// ============================================================================
+
+interface UnloadRecord {
+	serverId: string;
+	timestamp: number;
+	reservationId: string;
+}
+
+let unloadRegistry: UnloadRecord[] = [];
+
+function generateReservationId(): string {
+	return `vram-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function recordUnload(serverId: string): UnloadRecord {
+	const record: UnloadRecord = {
+		serverId,
+		timestamp: Date.now(),
+		reservationId: generateReservationId(),
+	};
+	unloadRegistry.push(record);
+	return record;
+}
+
+function getUnloadedServers(): UnloadRecord[] {
+	return [...unloadRegistry];
+}
+
+function clearUnloadRecords(serverIds?: string[]): void {
+	if (serverIds) {
+		unloadRegistry = unloadRegistry.filter(r => !serverIds.includes(r.serverId));
+	} else {
+		unloadRegistry = [];
+	}
 }
 
 // ============================================================================
@@ -180,9 +219,10 @@ function createConfigureServerTool(pi: ExtensionAPI) {
 			name: Type.String(),
 			baseUrl: Type.String(),
 			unloadEndpoint: Type.Optional(Type.String({ description: "Endpoint to unload models (default: /unload)" })),
+			reloadEndpoint: Type.Optional(Type.String({ description: "Endpoint to reload models (default: /reload)" })),
 		}),
 
-		async execute(_toolCallId: string, params: { serverId: string; name: string; baseUrl: string; unloadEndpoint?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: { serverId: string; name: string; baseUrl: string; unloadEndpoint?: string; reloadEndpoint?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
 			loadConfig(ctx);
 
 			const idx = config.servers.findIndex(s => s.id === params.serverId);
@@ -191,6 +231,7 @@ function createConfigureServerTool(pi: ExtensionAPI) {
 				name: params.name,
 				baseUrl: params.baseUrl,
 				unloadEndpoint: params.unloadEndpoint || "/unload",
+				reloadEndpoint: params.reloadEndpoint || "/reload",
 			};
 			if (idx >= 0) config.servers[idx] = server;
 			else config.servers.push(server);
@@ -270,6 +311,7 @@ function createRunComfyUITool(pi: ExtensionAPI) {
 					const result = await callServer(server.id, endpoint, { method: "POST" });
 					if (result.success) {
 						unloaded.push(server.id);
+						recordUnload(server.id);
 					} else {
 						return { content: [{ type: "text" as const, text: `Warning: Failed to unload ${server.id}: ${result.error}` }], isError: true, details: { promptId: undefined as string | undefined, completed: false as boolean, unloaded, warning: result.error as string | undefined, error: undefined as string | undefined } };
 					}
@@ -357,6 +399,10 @@ function createUnloadTool(pi: ExtensionAPI) {
 
 			const endpoint = server.unloadEndpoint || "/unload";
 			const result = await callServer(params.serverId, endpoint, { method: "POST" });
+
+			if (result.success) {
+				recordUnload(params.serverId);
+			}
 
 			return {
 				content: [{
@@ -506,6 +552,131 @@ function createCheckVramConflictTool(pi: ExtensionAPI) {
 	});
 }
 
+function createReloadTool(pi: ExtensionAPI) {
+	return defineTool({
+		name: "vram-manager-reload",
+		label: "Reload Server",
+		description: "Trigger model reload on a server that was previously unloaded",
+		parameters: Type.Object({
+			serverId: Type.String(),
+		}),
+
+		async execute(_toolCallId: string, params: { serverId: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			loadConfig(ctx);
+
+			const server = config.servers.find(s => s.id === params.serverId);
+			if (!server) {
+				return { content: [{ type: "text" as const, text: `Server "${params.serverId}" not found.` }], isError: true, details: { success: false, error: `Server ${params.serverId} not found` } };
+			}
+
+			const endpoint = server.reloadEndpoint || "/reload";
+			const result = await callServer(params.serverId, endpoint, { method: "POST" });
+
+			if (result.success) {
+				clearUnloadRecords([params.serverId]);
+			}
+
+			return {
+				content: [{
+					type: "text" as const,
+					text: result.success
+						? `Models reloaded on "${params.serverId}"`
+						: `Failed to reload "${params.serverId}": ${result.error}`
+				}],
+				details: result
+			};
+		},
+	});
+}
+
+function createReloadAllTool(pi: ExtensionAPI) {
+	return defineTool({
+		name: "vram-manager-reload-all",
+		label: "Reload All Unloaded Servers",
+		description: "Trigger model reload on every server that was previously unloaded by the VRAM manager",
+		parameters: Type.Object({}),
+
+		async execute(_toolCallId: string, _params: object, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			loadConfig(ctx);
+
+			const records = getUnloadedServers();
+			if (records.length === 0) {
+				return {
+					content: [{ type: "text" as const, text: "No servers to reload — nothing has been unloaded this session" }],
+					details: { reloaded: [] as string[], count: 0, failed: [] as { serverId: string; error: string }[] }
+				};
+			}
+
+			const reloaded: string[] = [];
+			const failed: Array<{ serverId: string; error: string }> = [];
+
+			for (const record of records) {
+				const server = config.servers.find(s => s.id === record.serverId);
+				if (!server) {
+					failed.push({ serverId: record.serverId, error: "Server not found in config" });
+					continue;
+				}
+				const endpoint = server.reloadEndpoint || "/reload";
+				const result = await callServer(record.serverId, endpoint, { method: "POST" });
+				if (result.success) {
+					reloaded.push(record.serverId);
+				} else {
+					failed.push({ serverId: record.serverId, error: result.error || "Unknown" });
+				}
+			}
+
+			clearUnloadRecords(reloaded);
+
+			const lines: string[] = [];
+			if (reloaded.length > 0) {
+				lines.push(`Reloaded: ${reloaded.join(", ")}`);
+			}
+			if (failed.length > 0) {
+				lines.push(`Failed: ${failed.map(f => `${f.serverId} (${f.error})`).join(", ")}`);
+			}
+
+			return {
+				content: [{ type: "text" as const, text: lines.join("\n") || "No servers to reload" }],
+				details: { reloaded, failed, count: reloaded.length }
+			};
+		},
+	});
+}
+
+function createLoadedModelsTool(_pi: ExtensionAPI) {
+	return defineTool({
+		name: "vram-manager-loaded-models",
+		label: "Loaded Models",
+		description: "Show which servers have been unloaded and are pending reload",
+		parameters: Type.Object({}),
+
+		async execute(_toolCallId: string, _params: object, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			loadConfig(ctx);
+
+			const records = getUnloadedServers();
+			if (records.length === 0) {
+				return {
+					content: [{ type: "text" as const, text: "No servers have been unloaded this session — all models should be loaded" }],
+					details: { unloaded: [], count: 0 }
+				};
+			}
+
+			const lines: string[] = ["Servers pending reload:"];
+			for (const r of records) {
+				const server = config.servers.find(s => s.id === r.serverId);
+				const name = server?.name || r.serverId;
+				const time = new Date(r.timestamp).toLocaleTimeString();
+				lines.push(`  ${name} (unloaded at ${time}, reservation: ${r.reservationId})`);
+			}
+
+			return {
+				content: [{ type: "text" as const, text: lines.join("\n") }],
+				details: { unloaded: records, count: records.length }
+			};
+		},
+	});
+}
+
 function createClearConfigTool(pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-clear-config",
@@ -540,6 +711,9 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(createSystemStatsTool(pi));
 	pi.registerTool(createCheckVramConflictTool(pi));
 	pi.registerTool(createClearConfigTool(pi));
+	pi.registerTool(createReloadTool(pi));
+	pi.registerTool(createReloadAllTool(pi));
+	pi.registerTool(createLoadedModelsTool(pi));
 
 	// Load persisted config on session start
 	pi.on("session_start", async (_event, ctx) => {
