@@ -284,102 +284,6 @@ function createConfigureGroupTool(pi: ExtensionAPI) {
 	});
 }
 
-function createRunComfyUITool(_pi: ExtensionAPI) {
-	return defineTool({
-		name: "vram-manager-run-comfyui",
-		label: "Run ComfyUI (with VRAM coordination)",
-		description: "Execute ComfyUI workflow with automatic VRAM management (unloads peer servers before running)",
-		parameters: Type.Object({
-			workflow: Type.String({ description: "Workflow name or JSON" }),
-			serverId: Type.Optional(Type.String({ description: "ComfyUI server ID (default: comfy)" })),
-			autoManageVram: Type.Optional(Type.Boolean({ description: "Auto-unload other servers (default: true)" })),
-		}),
-
-		async execute(_toolCallId: string, params: { workflow: string; serverId?: string; autoManageVram?: boolean }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
-			loadConfig(ctx);
-
-			const serverId = params.serverId || "comfy";
-			const autoManage = params.autoManageVram !== false;
-
-			// Step 1: Find other servers in same hardware group
-			const otherServers = getOtherServers(serverId);
-			const unloaded: string[] = [];
-
-			if (autoManage && otherServers.length > 0) {
-				for (const server of otherServers) {
-					const endpoint = server.unloadEndpoint || "/unload";
-					const result = await callServer(server.id, endpoint, { method: "POST" });
-					if (result.success) {
-						unloaded.push(server.id);
-						recordUnload(server.id);
-					} else {
-						return { content: [{ type: "text" as const, text: `Warning: Failed to unload ${server.id}: ${result.error}` }], isError: true, details: { promptId: undefined as string | undefined, completed: false as boolean, unloaded, warning: result.error as string | undefined, error: undefined as string | undefined } };
-					}
-				}
-			}
-
-			// Step 2: Execute ComfyUI workflow
-			const server = config.servers.find(s => s.id === serverId);
-			if (!server) {
-				return { content: [{ type: "text" as const, text: `Server "${serverId}" not found. Configure it first with vram-manager-configure-server.` }], isError: true, details: { promptId: undefined as string | undefined, completed: false as boolean, unloaded: [], warning: undefined as string | undefined, error: `Server ${serverId} not found` as string | undefined } };
-			}
-
-			let workflowJson: object;
-			try {
-				workflowJson = JSON.parse(params.workflow);
-			} catch {
-				const fetchResp = await fetch(`${server.baseUrl}/api/workspace/${params.workflow}`);
-				if (!fetchResp.ok) {
-					return { content: [{ type: "text" as const, text: `Workflow not found: ${params.workflow}` }], isError: true, details: { promptId: undefined as string | undefined, completed: false as boolean, unloaded: [], warning: undefined as string | undefined, error: `Workflow not found: ${params.workflow}` as string | undefined } };
-				}
-				workflowJson = await fetchResp.json();
-			}
-
-			const execResp = await fetch(`${server.baseUrl}/api/prompt`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ prompt: workflowJson }),
-			});
-
-			if (!execResp.ok) {
-				return { content: [{ type: "text" as const, text: `Execution failed: ${execResp.status}` }], isError: true, details: { promptId: undefined as string | undefined, completed: false as boolean, unloaded: [], warning: undefined as string | undefined, error: `Execution failed: ${execResp.status}` as string | undefined } };
-			}
-
-			const execData = await execResp.json();
-			const promptId = (execData as { prompt_id?: string }).prompt_id;
-
-			// Poll for completion
-			let completed = false;
-			for (let i = 0; i < 60; i++) {
-				await new Promise(r => setTimeout(r, 1000));
-				const queueResp = await fetch(`${server.baseUrl}/api/queue`);
-				if (!queueResp.ok) continue;
-				const queue = await queueResp.json();
-				if (!queue?.executing && !queue?.queue_pending?.length) {
-					completed = true;
-					break;
-				}
-			}
-
-			return {
-				content: [{
-					type: "text" as const,
-					text: completed
-						? `Workflow completed (ID: ${promptId})`
-						: `Workflow queued (ID: ${promptId}) — check back with comfyui_status`
-				}],
-				details: {
-					promptId,
-					completed,
-					unloaded,
-					warning: undefined,
-					error: undefined
-				}
-			};
-		},
-	});
-}
-
 function createUnloadTool(_pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-unload",
@@ -809,7 +713,6 @@ function createClearConfigTool(pi: ExtensionAPI) {
 export default function (pi: ExtensionAPI) {
 	pi.registerTool(createConfigureServerTool(pi));
 	pi.registerTool(createConfigureGroupTool(pi));
-	pi.registerTool(createRunComfyUITool(pi));
 	pi.registerTool(createUnloadTool(pi));
 	pi.registerTool(createGetConfigTool(pi));
 	pi.registerTool(createSystemStatsTool(pi));
