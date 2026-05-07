@@ -1,0 +1,17 @@
+{
+  "name": "vram-manager",
+  "version": "1.0.0",
+  "description": "VRAM orchestration - coordinate memory between servers sharing GPU",
+  "main": "src/extensions/vram-manager/vram-manager.ts",
+  "types": "src/extensions/vram-manager/vram-manager.ts",
+  "scripts": {
+    "validate": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "pi": {
+    "type": "tool",
+    "entrypoint": "src/extensions/vram-manager/vram-manager.ts"
+  }
+}
