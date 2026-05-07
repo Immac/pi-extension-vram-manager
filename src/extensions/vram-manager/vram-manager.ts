@@ -677,6 +677,110 @@ function createLoadedModelsTool(_pi: ExtensionAPI) {
 	});
 }
 
+function createReserveTool(pi: ExtensionAPI) {
+	return defineTool({
+		name: "vram-manager-reserve",
+		label: "Reserve VRAM",
+		description: "Reserve VRAM for a target server by unloading peer servers in the same hardware group. Returns a reservation token to be used with vram-manager-release.",
+		parameters: Type.Object({
+			serverId: Type.String({ description: "Target server ID to reserve VRAM for" }),
+		}),
+
+		async execute(_toolCallId: string, params: { serverId: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			loadConfig(ctx);
+
+			const otherServers = getOtherServers(params.serverId);
+			const reservationId = generateReservationId();
+			const unloaded: string[] = [];
+			const failed: Array<{ serverId: string; error: string }> = [];
+
+			for (const server of otherServers) {
+				const endpoint = server.unloadEndpoint || "/unload";
+				const result = await callServer(server.id, endpoint, { method: "POST" });
+				if (result.success) {
+					unloaded.push(server.id);
+					recordUnload(server.id);
+				} else {
+					failed.push({ serverId: server.id, error: result.error || "Unknown" });
+				}
+			}
+
+			const lines: string[] = [`VRAM reserved for "${params.serverId}"`];
+			lines.push(`Reservation ID: ${reservationId}`);
+			if (unloaded.length > 0) {
+				lines.push(`Unloaded: ${unloaded.join(", ")}`);
+			}
+			if (failed.length > 0) {
+				lines.push(`Failed to unload: ${failed.map(f => `${f.serverId} (${f.error})`).join(", ")}`);
+			}
+			if (otherServers.length === 0) {
+				lines.push("No peers in hardware group — no action needed");
+			}
+
+			return {
+				content: [{ type: "text" as const, text: lines.join("\n") }],
+				details: { reservationId, serverId: params.serverId, unloaded, failed, peerCount: otherServers.length }
+			};
+		},
+	});
+}
+
+function createReleaseTool(pi: ExtensionAPI) {
+	return defineTool({
+		name: "vram-manager-release",
+		label: "Release VRAM",
+		description: "Release VRAM reservation by reloading previously-unloaded peer servers. Use the reservation token returned by vram-manager-reserve.",
+		parameters: Type.Object({
+			reservationId: Type.Optional(Type.String({ description: "Reservation ID from vram-manager-reserve (omit to reload all unloaded servers)" })),
+		}),
+
+		async execute(_toolCallId: string, params: { reservationId?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			loadConfig(ctx);
+
+			const records = getUnloadedServers();
+			if (records.length === 0) {
+				return {
+					content: [{ type: "text" as const, text: "No servers to release — nothing has been unloaded this session" }],
+					details: { reloaded: [] as string[], count: 0, failed: [] as Array<{ serverId: string; error: string }> }
+				};
+			}
+
+			const reloaded: string[] = [];
+			const failed: Array<{ serverId: string; error: string }> = [];
+
+			for (const record of records) {
+				const server = config.servers.find(s => s.id === record.serverId);
+				if (!server) {
+					failed.push({ serverId: record.serverId, error: "Server not found in config" });
+					continue;
+				}
+				const endpoint = server.reloadEndpoint || "/reload";
+				const result = await callServer(record.serverId, endpoint, { method: "POST" });
+				if (result.success) {
+					reloaded.push(record.serverId);
+				} else {
+					failed.push({ serverId: record.serverId, error: result.error || "Unknown" });
+				}
+			}
+
+			clearUnloadRecords(reloaded);
+
+			const lines: string[] = [];
+			if (reloaded.length > 0) {
+				lines.push(`Released VRAM — reloaded: ${reloaded.join(", ")}`);
+			}
+			if (failed.length > 0) {
+				lines.push(`Failed to reload: ${failed.map(f => `${f.serverId} (${f.error})`).join(", ")}`);
+			}
+
+			return {
+				content: [{ type: "text" as const, text: lines.join("\n") || "No servers to release" }],
+				details: { reloaded, failed, count: reloaded.length }
+			};
+		},
+	});
+}
+
 function createClearConfigTool(pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-clear-config",
@@ -714,6 +818,8 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(createReloadTool(pi));
 	pi.registerTool(createReloadAllTool(pi));
 	pi.registerTool(createLoadedModelsTool(pi));
+	pi.registerTool(createReserveTool(pi));
+	pi.registerTool(createReleaseTool(pi));
 
 	// Load persisted config on session start
 	pi.on("session_start", async (_event, ctx) => {
