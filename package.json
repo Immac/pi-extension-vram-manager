@@ -6,7 +6,7 @@
   "types": "src/extensions/vram-manager/vram-manager.ts",
   "scripts": {
     "validate": "tsc --noEmit",
-    "test": "tsx --test src/extensions/vram-manager/test/vram-manager.test.ts"
+    "test": "npx tsx --test src/extensions/vram-manager/test/vram-manager.test.ts"
   },
   "devDependencies": {
     "typescript": "^5.0.0"
