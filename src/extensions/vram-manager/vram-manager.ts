@@ -100,6 +100,73 @@ function getOtherServers(targetServerId: string): Server[] {
 }
 
 // ============================================================================
+// VRAM Querying
+// ============================================================================
+
+interface VramDevice {
+	id: number;
+	name: string;
+	totalBytes: number;
+	freeBytes: number;
+	usedBytes: number;
+}
+
+interface VramStats {
+	serverId: string;
+	serverName: string;
+	devices: VramDevice[];
+	error?: string;
+}
+
+/**
+ * Query VRAM stats from a ComfyUI server via /system_stats.
+ * Returns per-device VRAM info if available.
+ */
+async function getVramStats(serverId: string): Promise<VramStats> {
+	const server = config.servers.find(s => s.id === serverId);
+	if (!server) {
+		return { serverId, serverName: serverId, devices: [], error: "Server not found" };
+	}
+
+	try {
+		const resp = await fetch(`${server.baseUrl}/system_stats`);
+		if (!resp.ok) {
+			return { serverId, serverName: server.name, devices: [], error: `HTTP ${resp.status}` };
+		}
+
+		const data = await resp.json() as Record<string, unknown>;
+		const system = data?.system as Record<string, unknown> | undefined;
+		const cudaDevices = system?.devices as Array<Record<string, unknown>> | undefined;
+
+		if (Array.isArray(cudaDevices) && cudaDevices.length > 0) {
+			const devices: VramDevice[] = cudaDevices.map((d, i) => ({
+				id: i,
+				name: String(d.name ?? `CUDA ${i}`),
+				totalBytes: Number(d.total ?? 0),
+				freeBytes: Number(d.free ?? 0),
+				usedBytes: Number((d as Record<string, unknown>).used ?? 0),
+			}));
+			return { serverId, serverName: server.name, devices };
+		}
+
+		// Try nvidia-smi fallback
+		return { serverId, serverName: server.name, devices: [], error: "No CUDA device data available" };
+	} catch (e) {
+		return { serverId, serverName: server.name, devices: [], error: String(e) };
+	}
+}
+
+/**
+ * Format bytes to human-readable size.
+ */
+function formatBytes(bytes: number): string {
+	if (bytes === 0) return "0 B";
+	const units = ["B", "KB", "MB", "GB", "TB"];
+	const i = Math.floor(Math.log(bytes) / Math.log(1024));
+	return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+}
+
+// ============================================================================
 // Tool Factories
 // ============================================================================
 
@@ -340,6 +407,105 @@ function createGetConfigTool(pi: ExtensionAPI) {
 	});
 }
 
+function createSystemStatsTool(_pi: ExtensionAPI) {
+	return defineTool({
+		name: "vram-manager-system-stats",
+		label: "System Stats",
+		description: "Query VRAM/system stats from registered servers",
+		parameters: Type.Object({
+			serverId: Type.Optional(Type.String({ description: "Server ID to query (omit for all servers)" })),
+		}),
+
+		async execute(_toolCallId: string, params: { serverId?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			loadConfig(ctx);
+
+			const serverIds = params.serverId
+				? [params.serverId]
+				: config.servers.map(s => s.id);
+
+			const results: VramStats[] = [];
+			for (const id of serverIds) {
+				const stats = await getVramStats(id);
+				results.push(stats);
+			}
+
+			const lines: string[] = ["VRAM Stats:"];
+			for (const r of results) {
+				lines.push(`  ${r.serverName} (${r.serverId}):`);
+				if (r.error) {
+					lines.push(`    ${r.error}`);
+				} else if (r.devices.length === 0) {
+					lines.push(`    No device data`);
+				} else {
+					for (const d of r.devices) {
+						lines.push(`    ${d.name}: ${formatBytes(d.freeBytes)} free / ${formatBytes(d.totalBytes)} total`);
+					}
+				}
+			}
+
+			return {
+				content: [{ type: "text" as const, text: lines.join("\n") }],
+				details: { stats: results }
+			};
+		},
+	});
+}
+
+function createCheckVramConflictTool(pi: ExtensionAPI) {
+	return defineTool({
+		name: "vram-manager-check-vram-conflict",
+		label: "Check VRAM Conflict",
+		description: "Check if running a workflow on a server would cause VRAM conflicts with peers in the same hardware group",
+		parameters: Type.Object({
+			serverId: Type.String({ description: "Target server ID to check" }),
+		}),
+
+		async execute(_toolCallId: string, params: { serverId: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			loadConfig(ctx);
+
+			const otherServers = getOtherServers(params.serverId);
+
+			if (otherServers.length === 0) {
+				return {
+					content: [{ type: "text" as const, text: `No VRAM conflict — "${params.serverId}" has no peers in its hardware group` }],
+					details: { conflict: false, peerCount: 0, peers: [], details: "No peers in group" }
+				};
+			}
+
+			// Check VRAM usage on peers
+			const peerStats: Array<{ serverId: string; name: string; hasVramData: boolean; freeBytes: number }> = [];
+			for (const peer of otherServers) {
+				const stats = await getVramStats(peer.id);
+				const freeBytes = stats.devices.reduce((sum, d) => sum + d.freeBytes, 0);
+				peerStats.push({
+					serverId: peer.id,
+					name: peer.name,
+					hasVramData: stats.devices.length > 0,
+					freeBytes
+				});
+			}
+
+			const hasConflict = peerStats.some(p => p.freeBytes < 1024 * 1024 * 1024); // less than 1GB free
+			const conflictWith = peerStats.filter(p => p.freeBytes < 1024 * 1024 * 1024);
+
+			const lines: string[] = [`VRAM Conflict Check for "${params.serverId}":`];
+			for (const p of peerStats) {
+				const free = p.hasVramData ? formatBytes(p.freeBytes) : "unknown";
+				const conflict = p.freeBytes < 1024 * 1024 * 1024 && p.hasVramData ? " ⚠️ conflict" : "";
+				lines.push(`  ${p.name}: ${free} free${conflict}`);
+			}
+			lines.push(hasConflict
+				? `Result: VRAM conflict detected — unload these servers before running: ${conflictWith.map(p => p.serverId).join(", ")}`
+				: `Result: No VRAM conflict — sufficient free memory available`);
+
+			return {
+				content: [{ type: "text" as const, text: lines.join("\n") }],
+				details: { conflict: hasConflict, peerCount: otherServers.length, peers: peerStats, details: hasConflict ? `Unload: ${conflictWith.map(p => p.serverId).join(", ")}` : "OK" }
+			};
+		},
+	});
+}
+
 function createClearConfigTool(pi: ExtensionAPI) {
 	return defineTool({
 		name: "vram-manager-clear-config",
@@ -371,6 +537,8 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(createRunComfyUITool(pi));
 	pi.registerTool(createUnloadTool(pi));
 	pi.registerTool(createGetConfigTool(pi));
+	pi.registerTool(createSystemStatsTool(pi));
+	pi.registerTool(createCheckVramConflictTool(pi));
 	pi.registerTool(createClearConfigTool(pi));
 
 	// Load persisted config on session start
