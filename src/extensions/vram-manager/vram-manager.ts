@@ -222,7 +222,8 @@ function createConfigureServerTool(pi: ExtensionAPI) {
 			reloadEndpoint: Type.Optional(Type.String({ description: "Endpoint to reload models (default: /reload)" })),
 		}),
 
-		async execute(_toolCallId: string, params: { serverId: string; name: string; baseUrl: string; unloadEndpoint?: string; reloadEndpoint?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: { serverId: string; name: string; baseUrl: string; unloadEndpoint?: string; reloadEndpoint?: string }, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const idx = config.servers.findIndex(s => s.id === params.serverId);
@@ -258,7 +259,8 @@ function createConfigureGroupTool(pi: ExtensionAPI) {
 			vramTotalGb: Type.Optional(Type.Number()),
 		}),
 
-		async execute(_toolCallId: string, params: { groupId: string; name: string; serverIds: string; vramTotalGb?: number }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: { groupId: string; name: string; serverIds: string; vramTotalGb?: number }, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const serverIds = params.serverIds.split(",").map(s => s.trim());
@@ -293,7 +295,8 @@ function createUnloadTool(_pi: ExtensionAPI) {
 			serverId: Type.String(),
 		}),
 
-		async execute(_toolCallId: string, params: { serverId: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: { serverId: string }, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const server = config.servers.find(s => s.id === params.serverId);
@@ -328,7 +331,8 @@ function createGetConfigTool(_pi: ExtensionAPI) {
 		description: "View all registered servers and hardware groups",
 		parameters: Type.Object({}),
 
-		async execute(_toolCallId: string, _params: object, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, _params: object, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const serverList = config.servers.map(s =>
@@ -366,7 +370,8 @@ function createSystemStatsTool(_pi: ExtensionAPI) {
 			serverId: Type.Optional(Type.String({ description: "Server ID to query (omit for all servers)" })),
 		}),
 
-		async execute(_toolCallId: string, params: { serverId?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: { serverId?: string }, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const serverIds = params.serverId
@@ -375,6 +380,7 @@ function createSystemStatsTool(_pi: ExtensionAPI) {
 
 			const results: VramStats[] = [];
 			for (const id of serverIds) {
+				if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 				const stats = await getVramStats(id);
 				results.push(stats);
 			}
@@ -410,7 +416,8 @@ function createCheckVramConflictTool(_pi: ExtensionAPI) {
 			serverId: Type.String({ description: "Target server ID to check" }),
 		}),
 
-		async execute(_toolCallId: string, params: { serverId: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: { serverId: string }, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const otherServers = getOtherServers(params.serverId);
@@ -465,7 +472,8 @@ function createReloadTool(_pi: ExtensionAPI) {
 			serverId: Type.String(),
 		}),
 
-		async execute(_toolCallId: string, params: { serverId: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: { serverId: string }, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const server = config.servers.find(s => s.id === params.serverId);
@@ -500,7 +508,8 @@ function createReloadAllTool(_pi: ExtensionAPI) {
 		description: "Trigger model reload on every server that was previously unloaded by the VRAM manager",
 		parameters: Type.Object({}),
 
-		async execute(_toolCallId: string, _params: object, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, _params: object, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const records = getUnloadedServers();
@@ -554,7 +563,8 @@ function createLoadedModelsTool(_pi: ExtensionAPI) {
 		description: "Show which servers have been unloaded and are pending reload",
 		parameters: Type.Object({}),
 
-		async execute(_toolCallId: string, _params: object, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, _params: object, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const records = getUnloadedServers();
@@ -590,7 +600,8 @@ function createReserveTool(_pi: ExtensionAPI) {
 			serverId: Type.String({ description: "Target server ID to reserve VRAM for" }),
 		}),
 
-		async execute(_toolCallId: string, params: { serverId: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: { serverId: string }, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const otherServers = getOtherServers(params.serverId);
@@ -638,7 +649,8 @@ function createReleaseTool(_pi: ExtensionAPI) {
 			reservationId: Type.Optional(Type.String({ description: "Reservation ID from vram-manager-reserve (omit to reload all unloaded servers)" })),
 		}),
 
-		async execute(_toolCallId: string, _params: { reservationId?: string }, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, _params: { reservationId?: string }, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			const records = getUnloadedServers();
@@ -692,7 +704,8 @@ function createClearConfigTool(pi: ExtensionAPI) {
 		description: "Reset VRAM manager configuration (removes all servers and hardware groups)",
 		parameters: Type.Object({}),
 
-		async execute(_toolCallId: string, _params: object, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, _params: object, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			if (signal?.aborted) return { content: [{ type: "text" as const, text: "Aborted by caller" }], details: {}, isError: true };
 			loadConfig(ctx);
 
 			config = { servers: [], hardwareGroups: [] };
